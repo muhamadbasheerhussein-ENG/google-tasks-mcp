@@ -37,20 +37,10 @@ export function createApp(config: ServerConfig) {
 
   app.use("*", cors({
     origin: (origin) => {
-      if (!origin) {
-        return "*";
-      }
-
-      if (origin.match(/^https?:\/\/localhost(:\d+)?$/) ||
-          origin.match(/^https?:\/\/127\.0\.0\.1(:\d+)?$/)) {
-        return origin;
-      }
-
+      if (!origin) return "*";
+      if (origin.match(/^https?:\/\/localhost(:\d+)?$/) || origin.match(/^https?:\/\/127\.0\.0\.1(:\d+)?$/)) return origin;
       const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()) || [];
-      if (allowedOrigins.includes(origin)) {
-        return origin;
-      }
-
+      if (allowedOrigins.includes(origin)) return origin;
       return null;
     },
     allowMethods: ["GET", "POST", "OPTIONS"],
@@ -60,7 +50,16 @@ export function createApp(config: ServerConfig) {
     maxAge: 86400,
   }));
 
+  // Compatibility: some MCP clients have been observed to send the
+  // authenticated post-OAuth MCP request to the origin root. Preserve the
+  // normal landing page for browser/unauthenticated GET requests, while
+  // routing authenticated root requests to the MCP transport.
   app.get("/", async (c) => {
+    const authHeader = c.req.header("Authorization");
+    if (authHeader?.startsWith("Bearer ")) {
+      return authenticateBearer(c, () => handleMcpGet(c));
+    }
+
     try {
       const html = await readFile("./public/index.html", "utf-8");
       c.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://www.googletagmanager.com; connect-src https://www.google-analytics.com; frame-ancestors 'none'");
@@ -69,6 +68,8 @@ export function createApp(config: ServerConfig) {
       return c.json({ message: "Google Tasks MCP Server" });
     }
   });
+
+  app.post("/", authenticateBearer, handleMcpPost);
 
   app.route("/", createOAuthRouter(config.oauthConfig));
 
