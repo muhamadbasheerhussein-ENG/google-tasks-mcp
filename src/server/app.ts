@@ -28,7 +28,6 @@ export function createApp(config: ServerConfig) {
 
     c.header("X-Content-Type-Options", "nosniff");
     c.header("X-Frame-Options", "DENY");
-    // Only set restrictive CSP if a route-specific one hasn't been set already
     if (!c.res.headers.get("Content-Security-Policy")) {
       c.header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
     }
@@ -56,7 +55,7 @@ export function createApp(config: ServerConfig) {
     },
     allowMethods: ["GET", "POST", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization", "Mcp-Session-Id", "Accept"],
-    exposeHeaders: ["Mcp-Session-Id", "Content-Type"],
+    exposeHeaders: ["Mcp-Session-Id", "Content-Type", "WWW-Authenticate"],
     credentials: false,
     maxAge: 86400,
   }));
@@ -81,6 +80,16 @@ export function createApp(config: ServerConfig) {
 
   app.get(MCP_ENDPOINT, authenticateBearer, handleMcpGet);
   app.post(MCP_ENDPOINT, authenticateBearer, handleMcpPost);
+
+  app.get("/.well-known/oauth-protected-resource", (c) => {
+    const baseUrl = new URL(c.req.url).origin;
+    return c.json({
+      resource: `${baseUrl}${MCP_ENDPOINT}`,
+      authorization_servers: [baseUrl],
+      bearer_methods_supported: ["header"],
+      resource_documentation: `${baseUrl}/`,
+    });
+  });
 
   app.get("/.well-known/oauth-authorization-server", (c) => {
     const baseUrl = new URL(c.req.url).origin;
