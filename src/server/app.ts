@@ -81,7 +81,7 @@ export function createApp(config: ServerConfig) {
   app.get(MCP_ENDPOINT, authenticateBearer, handleMcpGet);
   app.post(MCP_ENDPOINT, authenticateBearer, handleMcpPost);
 
-  app.get("/.well-known/oauth-protected-resource", (c) => {
+  const protectedResourceMetadata = (c: any) => {
     const baseUrl = new URL(c.req.url).origin;
     return c.json({
       resource: `${baseUrl}${MCP_ENDPOINT}`,
@@ -89,7 +89,10 @@ export function createApp(config: ServerConfig) {
       bearer_methods_supported: ["header"],
       resource_documentation: `${baseUrl}/`,
     });
-  });
+  };
+
+  app.get("/.well-known/oauth-protected-resource", protectedResourceMetadata);
+  app.get("/.well-known/oauth-protected-resource/mcp", protectedResourceMetadata);
 
   app.get("/.well-known/oauth-authorization-server", (c) => {
     const baseUrl = new URL(c.req.url).origin;
