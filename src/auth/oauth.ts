@@ -23,6 +23,7 @@ interface OAuthSession {
   codeChallengeMethod?: string;
   redirectUri: string;
   clientId?: string;
+  resource: string;
 }
 
 interface AuthCode {
@@ -30,6 +31,7 @@ interface AuthCode {
   clientId?: string;
   redirectUri: string;
   codeChallenge?: string;
+  resource: string;
 }
 
 interface RegisteredClient {
@@ -102,6 +104,20 @@ function sha256(buffer: string): Buffer {
   return crypto.createHash('sha256').update(buffer).digest();
 }
 
+function canonicalResource(requestUrl: string): string {
+  return `${new URL(requestUrl).origin}/mcp`;
+}
+
+function validateResource(resource: string | undefined, expected: string): resource is string {
+  if (!resource) return false;
+  try {
+    const parsed = new URL(resource);
+    return !parsed.hash && parsed.toString() === new URL(expected).toString();
+  } catch {
+    return false;
+  }
+}
+
 export async function initOAuthStore() {
   await oauthStore.init();
 }
@@ -140,6 +156,8 @@ export function createOAuthRouter(config: OAuthConfig) {
     const state = c.req.query("state");
     const codeChallenge = c.req.query("code_challenge");
     const codeChallengeMethod = c.req.query("code_challenge_method");
+    const resource = c.req.query("resource");
+    const expectedResource = canonicalResource(c.req.url);
 
     if (responseType !== "code") {
       logger.warn("OAuth authorization failed: unsupported response type");
@@ -156,6 +174,11 @@ export function createOAuthRouter(config: OAuthConfig) {
       return c.json({ error: "invalid_request", error_description: "state parameter is required for CSRF protection" }, 400);
     }
 
+    if (!validateResource(resource, expectedResource)) {
+      logger.warn("OAuth authorization failed: invalid or missing resource parameter");
+      return c.json({ error: "invalid_target", error_description: `resource must be ${expectedResource}` }, 400);
+    }
+
     logger.info("Starting OAuth authorization flow");
 
     const internalState = crypto.randomUUID();
@@ -166,6 +189,7 @@ export function createOAuthRouter(config: OAuthConfig) {
       codeChallengeMethod,
       redirectUri,
       clientId,
+      resource,
     });
 
     const googleAuthUrl = new URL(GOOGLE_AUTH_URL);
@@ -205,6 +229,7 @@ export function createOAuthRouter(config: OAuthConfig) {
       clientId: session.clientId,
       redirectUri: session.redirectUri,
       codeChallenge: session.codeChallenge,
+      resource: session.resource,
     });
 
     await oauthStore.deleteSession(internalState);
@@ -225,6 +250,7 @@ export function createOAuthRouter(config: OAuthConfig) {
     const code = body.code as string;
     const codeVerifier = body.code_verifier as string;
     const redirectUri = body.redirect_uri as string;
+    const resource = body.resource as string | undefined;
 
     if (grantType !== "authorization_code") {
       logger.warn("Token exchange failed: unsupported grant type");
@@ -242,6 +268,11 @@ export function createOAuthRouter(config: OAuthConfig) {
     if (redirectUri !== authCodeData.redirectUri) {
       logger.warn("Token exchange failed: redirect_uri mismatch");
       return c.json({ error: "invalid_grant", error_description: "redirect_uri does not match authorization request" }, 400);
+    }
+
+    if (!validateResource(resource, authCodeData.resource) || resource !== authCodeData.resource) {
+      logger.warn("Token exchange failed: resource mismatch");
+      return c.json({ error: "invalid_target", error_description: "resource does not match authorization request" }, 400);
     }
 
     if (authCodeData.codeChallenge) {
@@ -285,6 +316,7 @@ export function createOAuthRouter(config: OAuthConfig) {
         googleAccessToken: tokenData.access_token,
         googleRefreshToken: tokenData.refresh_token,
         expiresAt: Date.now() + tokenData.expires_in * 1000,
+        resource: authCodeData.resource,
       });
 
       await oauthStore.deleteAuthCode(code);
