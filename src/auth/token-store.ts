@@ -5,12 +5,14 @@ export interface TokenData {
   googleAccessToken: string;
   googleRefreshToken: string;
   expiresAt: number;
+  resource: string;
 }
 
 interface EncryptedTokenData {
   encryptedAccessToken: string;
   encryptedRefreshToken: string;
   expiresAt: number;
+  resource: string;
 }
 
 class TokenStore {
@@ -22,12 +24,13 @@ class TokenStore {
 
   async storeTokens(mcpToken: string, tokenData: TokenData): Promise<void> {
     if (!this.kv) throw new Error("KV not initialized");
-    const TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+    const TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
     const encryptedData: EncryptedTokenData = {
       encryptedAccessToken: encrypt(tokenData.googleAccessToken),
       encryptedRefreshToken: encrypt(tokenData.googleRefreshToken),
       expiresAt: tokenData.expiresAt,
+      resource: tokenData.resource,
     };
 
     await this.kv.set(["tokens", mcpToken], encryptedData, { expireIn: TTL_MS });
@@ -45,12 +48,14 @@ class TokenStore {
       googleAccessToken: decrypt(result.value.encryptedAccessToken),
       googleRefreshToken: decrypt(result.value.encryptedRefreshToken),
       expiresAt: result.value.expiresAt,
+      resource: result.value.resource,
     };
   }
 
-  async isValid(mcpToken: string): Promise<boolean> {
+  async isValid(mcpToken: string, expectedResource?: string): Promise<boolean> {
     const data = await this.getTokens(mcpToken);
-    return data !== null;
+    if (!data) return false;
+    return expectedResource ? data.resource === expectedResource : true;
   }
 
   async updateTokens(mcpToken: string, updates: Partial<TokenData>): Promise<void> {
@@ -67,6 +72,7 @@ class TokenStore {
       encryptedAccessToken: encrypt(updatedData.googleAccessToken),
       encryptedRefreshToken: encrypt(updatedData.googleRefreshToken),
       expiresAt: updatedData.expiresAt,
+      resource: updatedData.resource,
     };
 
     const TTL_MS = 30 * 24 * 60 * 60 * 1000;
