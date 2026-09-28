@@ -50,6 +50,45 @@ export async function handleMcpPost(c: Context) {
   const incoming = message as { method?: string; id?: string | number };
   logger.info(`MCP incoming method=${incoming.method ?? "<response/unknown>"} id=${incoming.id ?? "<none>"}`);
 
+  // Claude now probes remote MCP servers with the 2026-07-28 server/discover
+  // method before falling back to the legacy initialize handshake. This server
+  // still uses the v1 MCP SDK / 2025-era protocol, so advertise that explicitly
+  // instead of returning -32601. Do NOT claim 2026-07-28 support until the
+  // server is migrated to the v2 SDK and modern wire format.
+  if (incoming.method === "server/discover") {
+    const discoveryResponse = {
+      jsonrpc: "2.0",
+      id: incoming.id,
+      result: {
+        resultType: "complete",
+        supportedVersions: ["2025-06-18", "2025-03-26", "2024-11-05"],
+        capabilities: {
+          tools: {},
+        },
+        _meta: {
+          "io.modelcontextprotocol/serverInfo": {
+            name: "google-tasks-mcp",
+            version: "1.0.0",
+          },
+        },
+        instructions: "Google Tasks MCP server. Use the legacy MCP initialize handshake and tools capability.",
+        ttlMs: 0,
+        cacheScope: "private",
+      },
+    };
+
+    logger.info("MCP discovery probe answered with legacy protocol versions and tools capability");
+    return new Response(`data: ${JSON.stringify(discoveryResponse)}\n\n`, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  }
+
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
@@ -80,8 +119,6 @@ export async function handleMcpPost(c: Context) {
   const transport = new HonoSSETransport();
   transport.attachStream({
     writeSSE: async (data: { data: string; event?: string; id?: string }) => {
-      // Log only safe MCP envelope metadata. Never log tool arguments, results,
-      // OAuth tokens, or Google Tasks data.
       try {
         const outgoing = JSON.parse(data.data) as {
           id?: string | number;
@@ -130,11 +167,6 @@ export async function handleMcpPost(c: Context) {
 
       await transport.handleIncomingMessage(message);
 
-      // The stream is normally closed as soon as the response is written
-      // (see writeSSE in attachStream). This timer is only a safety backstop
-      // for messages that never produce a response (e.g. notifications), so it
-      // must be well above the slowest expected tool round-trip — a short
-      // cutoff here would truncate any response slower than the timeout.
       setTimeout(() => {
         closeStream();
       }, 30000);
