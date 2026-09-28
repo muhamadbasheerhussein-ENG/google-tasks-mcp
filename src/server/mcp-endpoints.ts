@@ -47,6 +47,9 @@ export async function handleMcpPost(c: Context) {
     }, 400);
   }
 
+  const incoming = message as { method?: string; id?: string | number };
+  logger.info(`MCP incoming method=${incoming.method ?? "<response/unknown>"} id=${incoming.id ?? "<none>"}`);
+
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
@@ -77,6 +80,27 @@ export async function handleMcpPost(c: Context) {
   const transport = new HonoSSETransport();
   transport.attachStream({
     writeSSE: async (data: { data: string; event?: string; id?: string }) => {
+      // Log only safe MCP envelope metadata. Never log tool arguments, results,
+      // OAuth tokens, or Google Tasks data.
+      try {
+        const outgoing = JSON.parse(data.data) as {
+          id?: string | number;
+          method?: string;
+          result?: { tools?: unknown[] };
+          error?: { code?: number; message?: string };
+        };
+        const toolCount = Array.isArray(outgoing.result?.tools)
+          ? outgoing.result!.tools!.length
+          : undefined;
+        logger.info(
+          `MCP outgoing id=${outgoing.id ?? "<none>"} method=${outgoing.method ?? "<response>"}` +
+            `${toolCount !== undefined ? ` tools=${toolCount}` : ""}` +
+            `${outgoing.error ? ` error=${outgoing.error.code ?? "?"}:${outgoing.error.message ?? "unknown"}` : ""}`,
+        );
+      } catch {
+        logger.info("MCP outgoing non-JSON SSE payload");
+      }
+
       await writeSSE(data.data, data.event);
       closeStream();
     },
@@ -114,8 +138,8 @@ export async function handleMcpPost(c: Context) {
       setTimeout(() => {
         closeStream();
       }, 30000);
-    } catch {
-      logger.error("Failed to handle MCP message via POST");
+    } catch (error) {
+      logger.error(`Failed to handle MCP message via POST: ${error instanceof Error ? error.message : String(error)}`);
       closeStream();
     }
   })();
